@@ -579,7 +579,6 @@ models = {
     "weapon": load_model("weapon3.pt"),
     "cigarette": load_model("best-cigarette.pt"),
     "violence": load_model("best-violence.pt"),
-
 }
 
 
@@ -645,7 +644,7 @@ def draw_bounding_boxes_np(
         cv2.rectangle(output, (x1, y1), (x2, y2), (0, 255, 0), 2)
         text = f"{label} ({confidence:.2f})"
         text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-        
+
         # Calculate text position
         text_w, text_h = text_size
         if y1 - text_h - 10 < 0:
@@ -767,26 +766,26 @@ def process_video_media(
     last_bbox_frame = None
     last_blurred_frame = None
     last_detections = []
-    
+
     try:
         while True:
             ret, frame = capture.read()
             if not ret:
                 break
-            
+
             # Process frame only if it's the Nth frame (based on VIDEO_FRAME_SKIP)
             should_process = (frame_index % VIDEO_FRAME_SKIP) == 0
-            
+
             if should_process:
                 # Run AI detection on this frame
                 detections = run_models_on_frame(frame, model_types, thresholds)
                 last_detections = detections  # Cache for skipped frames
-                
+
                 if writer_processed is not None:
                     bbox_frame = draw_bounding_boxes_np(frame, detections)
                     last_bbox_frame = bbox_frame
                     writer_processed.write(bbox_frame)
-                    
+
                 if writer_blurred is not None:
                     blurred_frame = blur_detected_areas_np(frame, detections)
                     last_blurred_frame = blurred_frame
@@ -794,7 +793,7 @@ def process_video_media(
             else:
                 # Skip AI processing, reuse previous frame's detection results
                 detections = last_detections
-                
+
                 # Write the raw frame with previous detections overlaid
                 if writer_processed is not None:
                     if last_bbox_frame is not None:
@@ -803,7 +802,7 @@ def process_video_media(
                         writer_processed.write(bbox_frame)
                     else:
                         writer_processed.write(frame)
-                        
+
                 if writer_blurred is not None:
                     if last_blurred_frame is not None:
                         # Apply previous blur to current frame
@@ -1147,10 +1146,18 @@ def serialize_datetime(value: Any) -> Optional[str]:
 async def analyze_image(
     request: Request,
     api_key_data: Dict[str, Any] = Depends(require_api_key),
-    images: List[UploadFile] = File(..., description="ไฟล์ภาพหรือ .zip ที่มีภาพ (ส่งได้หลายไฟล์)"),
-    analysis_types: Optional[str] = Form(None, description="เช่น `['porn','weapon']` หรือ `porn,weapon`"),
-    thresholds: Optional[str] = Form(None, description='เช่น `{"porn":0.3,"weapon":0.5}`'),
-    output_modes: Optional[str] = Form(None, description='เช่น `["bbox","blur"]` หรือ `bbox,blur`'),
+    images: List[UploadFile] = File(
+        ..., description="ไฟล์ภาพหรือ .zip ที่มีภาพ (ส่งได้หลายไฟล์)"
+    ),
+    analysis_types: Optional[str] = Form(
+        None, description="เช่น `['porn','weapon']` หรือ `porn,weapon`"
+    ),
+    thresholds: Optional[str] = Form(
+        None, description='เช่น `{"porn":0.3,"weapon":0.5}`'
+    ),
+    output_modes: Optional[str] = Form(
+        None, description='เช่น `["bbox","blur"]` หรือ `bbox,blur`'
+    ),
 ):
     files_payload: List[Dict[str, str]] = []
     skipped_entries: List[Dict[str, Any]] = []
@@ -1180,11 +1187,16 @@ async def analyze_image(
                                 continue
                             member_name = Path(member.filename).name or member.filename
                             member_ext = Path(member_name).suffix.lower()
-                            if not member_ext or member_ext not in ALLOWED_IMAGE_EXTENSIONS:
-                                skipped_entries.append({
-                                    "name": member.filename,
-                                    "reason": "unsupported_extension"
-                                })
+                            if (
+                                not member_ext
+                                or member_ext not in ALLOWED_IMAGE_EXTENSIONS
+                            ):
+                                skipped_entries.append(
+                                    {
+                                        "name": member.filename,
+                                        "reason": "unsupported_extension",
+                                    }
+                                )
                                 continue
                             files_payload.append(
                                 save_bytes_to_uploads(
@@ -1192,10 +1204,9 @@ async def analyze_image(
                                 )
                             )
                 except zipfile.BadZipFile:
-                    skipped_entries.append({
-                        "name": original_name,
-                        "reason": "invalid_zip"
-                    })
+                    skipped_entries.append(
+                        {"name": original_name, "reason": "invalid_zip"}
+                    )
                 continue
 
             # --- กรณีไฟล์เดี่ยว ---
@@ -1207,10 +1218,9 @@ async def analyze_image(
                     original_name = f"{original_name}{extension}"
 
             if extension and extension not in ALLOWED_IMAGE_EXTENSIONS:
-                skipped_entries.append({
-                    "name": original_name,
-                    "reason": "unsupported_extension"
-                })
+                skipped_entries.append(
+                    {"name": original_name, "reason": "unsupported_extension"}
+                )
                 await upload.close()
                 continue
 
@@ -1226,24 +1236,26 @@ async def analyze_image(
             )
 
         # --- 2. วิเคราะห์ config ---
-        resolved_analysis_types = parse_analysis_types_value(analysis_types) or \
-                                  parse_analysis_types_value(api_key_data.get("analysis_types"))
+        resolved_analysis_types = parse_analysis_types_value(
+            analysis_types
+        ) or parse_analysis_types_value(api_key_data.get("analysis_types"))
         resolved_analysis_types = [m for m in resolved_analysis_types if m in models]
         if not resolved_analysis_types:
             for rec in files_payload:
                 remove_stored_file(rec)
             raise HTTPException(
                 status_code=400,
-                detail="กรุณาเลือกโมเดลอย่างน้อย 1 โมเดล (เช่น porn, weapon)"
+                detail="กรุณาเลือกโมเดลอย่างน้อย 1 โมเดล (เช่น porn, weapon)",
             )
 
-        media_access = {str(x).lower() for x in api_key_data.get("media_access", []) if x}
+        media_access = {
+            str(x).lower() for x in api_key_data.get("media_access", []) if x
+        }
         if media_access and "image" not in media_access:
             for rec in files_payload:
                 remove_stored_file(rec)
             raise HTTPException(
-                status_code=403,
-                detail="API Key ไม่รองรับการวิเคราะห์รูปภาพ"
+                status_code=403, detail="API Key ไม่รองรับการวิเคราะห์รูปภาพ"
             )
 
         resolved_thresholds = parse_thresholds_value(api_key_data.get("thresholds"))
@@ -1252,7 +1264,9 @@ async def analyze_image(
         for model_type in resolved_analysis_types:
             resolved_thresholds.setdefault(model_type, 0.5)
 
-        resolved_output_modes = parse_output_modes_value(api_key_data.get("output_modes"))
+        resolved_output_modes = parse_output_modes_value(
+            api_key_data.get("output_modes")
+        )
         if not resolved_output_modes:
             resolved_output_modes = parse_output_modes_value(output_modes)
         if not resolved_output_modes:
@@ -1274,11 +1288,13 @@ async def analyze_image(
 
                 if not is_image(file_path):
                     remove_stored_file(record)
-                    results.append({
-                        "original_filename": original_name,
-                        "status": "error",
-                        "error": "Invalid or corrupted image"
-                    })
+                    results.append(
+                        {
+                            "original_filename": original_name,
+                            "status": "error",
+                            "error": "Invalid or corrupted image",
+                        }
+                    )
                     continue
 
                 try:
@@ -1301,21 +1317,31 @@ async def analyze_image(
                         processed_filename = f"processed_{uuid.uuid4()}.jpg"
                         processed_path = UPLOAD_FOLDER / processed_filename
                         output_image.save(processed_path)
-                        uploaded_files_collection.insert_one({
-                            "filename": processed_filename,
-                            "created_at": datetime.utcnow(),
-                        })
-                        processed_url = str(request.url_for("uploaded_file", filename=processed_filename))
+                        uploaded_files_collection.insert_one(
+                            {
+                                "filename": processed_filename,
+                                "created_at": datetime.utcnow(),
+                            }
+                        )
+                        processed_url = str(
+                            request.url_for(
+                                "uploaded_file", filename=processed_filename
+                            )
+                        )
 
                     if include_blur:
                         blurred_filename = f"blurred_{uuid.uuid4()}.jpg"
                         blurred_path = UPLOAD_FOLDER / blurred_filename
                         blurred_output.save(blurred_path)
-                        uploaded_files_collection.insert_one({
-                            "filename": blurred_filename,
-                            "created_at": datetime.utcnow(),
-                        })
-                        blurred_url = str(request.url_for("uploaded_file", filename=blurred_filename))
+                        uploaded_files_collection.insert_one(
+                            {
+                                "filename": blurred_filename,
+                                "created_at": datetime.utcnow(),
+                            }
+                        )
+                        blurred_url = str(
+                            request.url_for("uploaded_file", filename=blurred_filename)
+                        )
 
                     # ตัดสินผล
                     status_result = "passed"
@@ -1352,29 +1378,41 @@ async def analyze_image(
                             "blurred_filename": blurred_filename,
                             "media_type": "image",
                             "output_modes": resolved_output_modes,
-                            "media_access": list(media_access) if media_access else ["image", "video"],
+                            "media_access": (
+                                list(media_access)
+                                if media_access
+                                else ["image", "video"]
+                            ),
                         },
                     )
 
                 except Exception as e:
-                    results.append({
-                        "original_filename": original_name,
-                        "status": "error",
-                        "error": str(e),
-                    })
+                    results.append(
+                        {
+                            "original_filename": original_name,
+                            "status": "error",
+                            "error": str(e),
+                        }
+                    )
                     remove_stored_file(record)
                 finally:
                     Path(file_path).unlink(missing_ok=True)
 
         # --- 4. สรุปผลตอบกลับ ---
         valid_results = [r for r in results if r["status"] in ("passed", "failed")]
-        overall_status = "failed" if any(r["status"] == "failed" for r in valid_results) else \
-                         "passed" if valid_results else "error"
+        overall_status = (
+            "failed"
+            if any(r["status"] == "failed" for r in valid_results)
+            else "passed" if valid_results else "error"
+        )
 
         if processed_count:
             api_keys_collection.update_one(
                 {"api_key": api_key},
-                {"$set": {"last_used_at": datetime.utcnow()}, "$inc": {"usage_count": processed_count}},
+                {
+                    "$set": {"last_used_at": datetime.utcnow()},
+                    "$inc": {"usage_count": processed_count},
+                },
             )
 
         response_payload = {
@@ -1388,12 +1426,16 @@ async def analyze_image(
         # ถ้าส่งมา 1 ไฟล์ → ยุบ results ลงมา top-level (backward compatible)
         if len(valid_results) == 1:
             single = valid_results[0]
-            response_payload.update({
-                "detections": single["detections"],
-                "model_summary": single.get("model_summary"),
-                "processed_image_url": single.get("processed_image_url"),
-                "processed_blurred_image_url": single.get("processed_blurred_image_url"),
-            })
+            response_payload.update(
+                {
+                    "detections": single["detections"],
+                    "model_summary": single.get("model_summary"),
+                    "processed_image_url": single.get("processed_image_url"),
+                    "processed_blurred_image_url": single.get(
+                        "processed_blurred_image_url"
+                    ),
+                }
+            )
 
         return JSONResponse(response_payload)
 
@@ -1404,8 +1446,7 @@ async def analyze_image(
             remove_stored_file(rec)
         print(f"[analyze-image] unexpected error: {e}")
         raise HTTPException(
-            status_code=500,
-            detail="Internal server error during image analysis"
+            status_code=500, detail="Internal server error during image analysis"
         )
 
 
@@ -2109,7 +2150,8 @@ async def upload_receipt(
 
             except Exception as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail="วันที่ในสลิปไม่ตรงกับวันที่สร้างออร์เดอร์"
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="วันที่ในสลิปไม่ตรงกับวันที่สร้างออร์เดอร์",
                 ) from exc
 
         if time_receipts:
@@ -2126,7 +2168,8 @@ async def upload_receipt(
                     )
             except Exception as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail="เวลาในสลิปห่างกันเกิน 5 นาที"
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="เวลาในสลิปห่างกันเกิน 5 นาที",
                 ) from exc
 
         if amount:
@@ -2365,10 +2408,7 @@ async def verify_otp(payload: Dict[str, Any]):
         )
 
     # Mark OTP as used to prevent reuse
-    otp_collection.update_one(
-        {"email": email, "otp": otp},
-        {"$set": {"used": True}}
-    )
+    otp_collection.update_one({"email": email, "otp": otp}, {"$set": {"used": True}})
 
     return {"message": "OTP ถูกต้อง"}
 
@@ -2381,7 +2421,7 @@ async def reset_password(payload: Dict[str, Any]):
     confirm_password = payload.get("confirm_password")
 
     print(f"[DEBUG] Reset password request for email: {email}")
-    
+
     if password != confirm_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="รหัสผ่านไม่ตรงกัน"
@@ -2396,13 +2436,13 @@ async def reset_password(payload: Dict[str, Any]):
         )
 
     print(f"[DEBUG] OTP verified for {email}")
-    
+
     try:
         hashed_password = generate_password_hash(
             password, method="pbkdf2:sha256", salt_length=8
         )
         print(f"[DEBUG] Generated password hash: {str(hashed_password)[:50]}...")
-        
+
         # Check if user exists
         user_before = users_collection.find_one({"email": email})
         if not user_before:
@@ -2410,33 +2450,40 @@ async def reset_password(payload: Dict[str, Any]):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="ไม่พบผู้ใช้นี้ในระบบ"
             )
-        
-        old_pass = user_before.get('password', '')
-        print(f"[DEBUG] User found, old password hash: {str(old_pass)[:50] if old_pass else 'None'}...")
-        
+
+        old_pass = user_before.get("password", "")
+        print(
+            f"[DEBUG] User found, old password hash: {str(old_pass)[:50] if old_pass else 'None'}..."
+        )
+
         result = users_collection.update_one(
             {"email": email}, {"$set": {"password": hashed_password}}
         )
-        print(f"[DEBUG] Update result - matched: {result.matched_count}, modified: {result.modified_count}")
-        
+        print(
+            f"[DEBUG] Update result - matched: {result.matched_count}, modified: {result.modified_count}"
+        )
+
         # Verify the update
         user_after = users_collection.find_one({"email": email})
-        new_pass = user_after.get('password', '') if user_after else ''
-        print(f"[DEBUG] New password hash: {str(new_pass)[:50] if new_pass else 'None'}...")
-        
+        new_pass = user_after.get("password", "") if user_after else ""
+        print(
+            f"[DEBUG] New password hash: {str(new_pass)[:50] if new_pass else 'None'}..."
+        )
+
         # Clean up OTP after successful password reset
         otp_collection.delete_one({"email": email, "otp": otp})
         print(f"[DEBUG] OTP deleted for {email}")
-        
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"[ERROR] Failed to update password: {type(e).__name__}: {str(e)}")
         import traceback
+
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"เกิดข้อผิดพลาดในการรีเซ็ตรหัสผ่าน: {str(e)}"
+            detail=f"เกิดข้อผิดพลาดในการรีเซ็ตรหัสผ่าน: {str(e)}",
         )
 
     return {"message": "รีเซ็ตรหัสผ่านเรียบร้อยแล้ว"}

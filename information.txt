@@ -1,2 +1,26 @@
+รัน python
 uvicorn app:app --reload
 python -m uvicorn app:app --reload
+
+git/github
+git init
+git remote add origin https://github.com/yourname/your-repo.git
+git add .
+git commit -m "เพิ่มฟีเจอร์การล็อกอิน"
+git push -u origin main                  Push (ส่งขึ้น GitHub)
+git status	                             เช็คดูว่ามีไฟล์ไหนถูกแก้ไขบ้าง และยังไม่ได้ Add/Commit
+git log	                                 ดูประวัติการ Commit ย้อนหลัง
+git pull	                             ดึงโค้ดล่าสุดจาก GitHub ลงมาที่เครื่อง (ใช้เวลาทำงานกลุ่ม)
+git clone                                ดึงโค้ดล่าสุดจาก GitHub ลงมาที่เครื่อง (ใช้เวลาทำงานกลุ่ม)
+git log --oneline                        ดูประวัติ commit
+git revert e5f6g7h                       ย้อนกลับแบบปลอดภัย (Git Revert)
+git reset --hard e5f6g7h                 ย้อนกลับแบบลบของใหม่ทิ้งไปเลย (Git Reset)
+git branch                               ดูว่าตอนนี้เรามี Branch อะไรบ้าง
+git branch ขื่อเเบนช์                        สร้าง Branch ใหม่
+git checkout ชื่อกิ่ง                        สลับไปใช้งาน Branch นั้น
+git checkout -b ชื่อกิ่งใหม่                  สร้างและสลับไปทันที
+git branch -M main                       เปลี่ยนชื่อ branch ปัจจุบัน:
+
+การเอามารวมกัน (Merge): สมมติว่าคุณทำฟีเจอร์ในกิ่ง feature-ui เสร็จแล้ว และอยากเอากลับไปรวมที่กิ่งหลัก (main):
+สลับกลับไปกิ่งหลักก่อน: git checkout main
+สั่งรวมร่าง: git merge feature-ui
