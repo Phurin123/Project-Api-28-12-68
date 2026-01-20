@@ -67,10 +67,10 @@ function resetMediaDisplay() {
   const processedVideo = document.getElementById('processedVideo');
   const blurredVideo = document.getElementById('blurredVideo');
   const containers = [
-    'imageOriginalContainer',
     'imageProcessedContainer',
     'videoProcessedContainer',
     'videoBlurredContainer',
+    'imageGalleryContainer',
   ];
 
   [imagePreview, processedImage].forEach((img) => {
