@@ -376,15 +376,16 @@ class AdvancedSlipOCR:
 # ส่วน main() ไม่เปลี่ยนมาก — แต่ลบการพิมพ์ receipt_number, merchant, confidence
 def main():
     ocr = AdvancedSlipOCR()
-    kasikor = r"C:\Users\khongkaphan\Downloads\สื่อ (12) (1).jpeg"
-    krungthai = r"C:\Users\khongkaphan\Downloads\สื่อ (1).jpg"
-    aomsin = r"C:\Users\khongkaphan\Downloads\สื่อ (5).jpg"
-    krungthep = r"C:\Users\khongkaphan\Downloads\สื่อ (3).jpg"
-    krungsri = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\retest 1.png"
-    thaipanit = r"C:\Users\khongkaphan\Downloads\สื่อ (8).jpg"
-    gg = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\retest 1.png"
+    kasikor = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\กสิกร.jpeg"
+    krungthai = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\กรุงไทย.jpg"
+    krungthep = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\กรุงเทพ.webp"
+    krungsri = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\กรุงศรี.webp"
+    thaipanit = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\ไทยพาณิชย์.webp"
+    aomsin = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\ออมสิน.jpg"
+    isaram = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\อิสลาม.png"
+    thanachat = r"C:\Users\lovew\OneDrive\รูปภาพ\slip-test\ธนชาติ.png"
 
-    image_path = gg
+    image_path = thanachat
 
     if os.path.exists(image_path):
         image = cv2.imread(image_path)

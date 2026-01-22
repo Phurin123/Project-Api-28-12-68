@@ -99,7 +99,7 @@ final_image = cv2.vconcat([header, grid_body])
 # 5. บันทึกผลลัพธ์
 # ==========================================
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-filename = f"combined_result_{timestamp}.png"
+filename = f"result_{timestamp}.png"
 output_path = os.path.join(output_dir, filename)
 
 cv2.imwrite(output_path, final_image)
