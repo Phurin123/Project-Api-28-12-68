@@ -297,7 +297,7 @@ async function uploadVideo() {
   input.accept = 'video/*';
 
   input.onchange = async () => {
-    const file = input.files?. [0];
+    const file = input.files?.[0];
     if (!file) return;
 
     const selection = collectModelSelections();

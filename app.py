@@ -2268,31 +2268,6 @@ async def upload_receipt(
             except Exception:
                 pass
 
-
-@app.post("/upload")
-async def upload(
-    image: UploadFile = File(...),
-    analysis_types: str = Form(...),
-    thresholds: str = Form(...),
-):
-    file_bytes = await image.read()
-    files = {"image": (image.filename, file_bytes, image.content_type)}
-    await image.close()
-    data = {"analysis_types": analysis_types, "thresholds": thresholds}
-
-    response = requests.post(
-        "https://objexify.dpdns.org/analyze-image",
-        headers={"x-api-key": API_KEY_SECRET},
-        files=files,
-        data=data,
-    )
-    return Response(
-        content=response.content,
-        status_code=response.status_code,
-        media_type=response.headers.get("Content-Type"),
-    )
-
-
 @app.get("/auth/google")
 async def auth_google() -> RedirectResponse:
     google_auth_url = (
