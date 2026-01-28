@@ -21,17 +21,12 @@ import tempfile
 import uuid
 import zipfile
 from urllib.parse import urlparse
-
 import cv2
 import jwt
 import numpy as np
 import requests
 import torch
-
-try:
-    import imageio
-except Exception:  # imageio is optional; fallback to OpenCV writer if missing
-    imageio = None
+import imageio
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from fastapi import (
@@ -63,10 +58,8 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 from werkzeug.security import check_password_hash, generate_password_hash
 from zoneinfo import ZoneInfo
-
 from ocr_slip import AdvancedSlipOCR
 from ultralytics import YOLO
-
 
 load_dotenv()
 
@@ -103,10 +96,6 @@ CONTENT_TYPE_EXTENSION_MAP = {
 }
 
 ALLOWED_OUTPUT_MODES = {"blur", "bbox"}
-
-GMAIL_ADDRESS_PATTERN = re.compile(
-    r"^[a-z0-9](?:[a-z0-9_.+-]{0,62}[a-z0-9])?@gmail\.com$"
-)
 
 try:
     MAX_CONCURRENT_ANALYSIS = max(int(os.getenv("MAX_CONCURRENT_ANALYSIS", "2")), 1)
@@ -1147,7 +1136,9 @@ async def analyze_image(
     request: Request,
     api_key_data: Dict[str, Any] = Depends(require_api_key),
     images: List[UploadFile] = File(
-        ..., description="ไฟล์ภาพหรือ .zip ที่มีภาพ (ส่งได้หลายไฟล์)"
+        ...,
+        description="ไฟล์ภาพหรือ .zip ที่มีภาพ (ส่งได้หลายไฟล์)",
+        max_files=100,  # ต้องใช้ FastAPI >= 0.100.0
     ),
     analysis_types: Optional[str] = Form(
         None, description="เช่น `['porn','weapon']` หรือ `porn,weapon`"
@@ -1161,32 +1152,87 @@ async def analyze_image(
 ):
     files_payload: List[Dict[str, str]] = []
     skipped_entries: List[Dict[str, Any]] = []
+    MAX_TOTAL_IMAGES = 100
 
     try:
-        # --- 1. ประมวลผลไฟล์ทั้งหมด (รวม zip) ---
+        # --- 1. อ่านเนื้อหาไฟล์ทั้งหมดเข้า memory (ครั้งเดียว) ---
+        prepared_files = []
         for upload in images:
-            original_name = sanitize_filename(upload.filename or "upload")
+            user_provided_name = upload.filename or "upload"
+            original_name = sanitize_filename(user_provided_name)
             extension = Path(original_name).suffix.lower()
 
-            # ถ้าไม่มี extension → ดูจาก content-type
+            # ดึง extension จาก content-type ถ้าไม่มี
             if not extension:
                 extension = CONTENT_TYPE_EXTENSION_MAP.get(
                     (upload.content_type or "").lower(), ""
                 )
-                if extension:
+                if extension and not original_name.lower().endswith(extension):
                     original_name = f"{original_name}{extension}"
 
-            # --- กรณี zip ---
-            if extension == ".zip":
-                data = await upload.read()
-                await upload.close()
+            content = await upload.read()
+            await upload.close()
+
+            # ✅ สร้างชื่อสุ่มสำหรับบันทึกจริง
+            random_name = f"img_{uuid.uuid4()}{extension}"
+
+            prepared_files.append(
+                {
+                    "original_name": original_name,  # ชื่อเดิม (แสดงผล)
+                    "random_name": random_name,  # ชื่อสุ่ม (บันทึกจริง)
+                    "extension": extension,
+                    "content": content,
+                }
+            )
+
+        # --- 2. นับจำนวนภาพรวม (รวมใน ZIP) ---
+        total_image_count = 0
+        for item in prepared_files:
+            ext = item["extension"]
+            if ext == ".zip":
                 try:
-                    with zipfile.ZipFile(BytesIO(data)) as archive:
+                    with zipfile.ZipFile(BytesIO(item["content"])) as archive:
                         for member in archive.infolist():
                             if member.is_dir():
                                 continue
-                            member_name = Path(member.filename).name or member.filename
-                            member_ext = Path(member_name).suffix.lower()
+                            member_ext = Path(member.filename).suffix.lower()
+                            if member_ext in ALLOWED_IMAGE_EXTENSIONS:
+                                total_image_count += 1
+                except zipfile.BadZipFile:
+                    pass  # ZIP เสีย → ไม่นับ
+            else:
+                if ext in ALLOWED_IMAGE_EXTENSIONS:
+                    total_image_count += 1
+
+        if total_image_count > MAX_TOTAL_IMAGES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Total number of images (including inside ZIP files) must not exceed {MAX_TOTAL_IMAGES}.",
+            )
+
+        if total_image_count == 0:
+            return JSONResponse(
+                {"error": "No valid image files provided", "skipped": skipped_entries},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- 3. ประมวลผลไฟล์จริง ---
+        for item in prepared_files:
+            original_name = item["original_name"]
+            random_name = item["random_name"]
+            extension = item["extension"]
+            content = item["content"]
+
+            if extension == ".zip":
+                try:
+                    with zipfile.ZipFile(BytesIO(content)) as archive:
+                        for member in archive.infolist():
+                            if member.is_dir():
+                                continue
+                            member_original_name = (
+                                Path(member.filename).name or member.filename
+                            )
+                            member_ext = Path(member_original_name).suffix.lower()
                             if (
                                 not member_ext
                                 or member_ext not in ALLOWED_IMAGE_EXTENSIONS
@@ -1198,9 +1244,11 @@ async def analyze_image(
                                     }
                                 )
                                 continue
+                            # ✅ ใช้ชื่อสุ่มสำหรับไฟล์ใน ZIP ด้วย
+                            member_random_name = f"img_{uuid.uuid4()}{member_ext}"
                             files_payload.append(
                                 save_bytes_to_uploads(
-                                    archive.read(member), member_ext, member_name
+                                    archive.read(member), member_ext, member_random_name
                                 )
                             )
                 except zipfile.BadZipFile:
@@ -1210,32 +1258,21 @@ async def analyze_image(
                 continue
 
             # --- กรณีไฟล์เดี่ยว ---
-            if not extension:
-                extension = CONTENT_TYPE_EXTENSION_MAP.get(
-                    (upload.content_type or "").lower(), ".jpg"
-                )
-                if extension and not original_name.lower().endswith(extension):
-                    original_name = f"{original_name}{extension}"
-
-            if extension and extension not in ALLOWED_IMAGE_EXTENSIONS:
+            if extension not in ALLOWED_IMAGE_EXTENSIONS:
                 skipped_entries.append(
                     {"name": original_name, "reason": "unsupported_extension"}
                 )
-                await upload.close()
                 continue
 
-            # บันทึกไฟล์
-            files_payload.append(
-                await save_upload_file(upload, original_name=original_name)
-            )
+            # ✅ ใช้ชื่อสุ่มในการบันทึก
+            temp_file = BytesIO(content)
+            temp_upload = UploadFile(filename=random_name, file=temp_file)
+            record = await save_upload_file(temp_upload, original_name=random_name)
+            # เก็บ original_name ไว้ใน record สำหรับ response
+            record["original_filename"] = original_name
+            files_payload.append(record)
 
-        if not files_payload:
-            return JSONResponse(
-                {"error": "No valid image files provided", "skipped": skipped_entries},
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # --- 2. วิเคราะห์ config ---
+        # --- 4-6. วิเคราะห์ config, ประมวลผล, สรุปผล (เหมือนเดิม) ---
         resolved_analysis_types = parse_analysis_types_value(
             analysis_types
         ) or parse_analysis_types_value(api_key_data.get("analysis_types"))
@@ -1275,7 +1312,6 @@ async def analyze_image(
         include_bbox = "bbox" in resolved_output_modes
         include_blur = "blur" in resolved_output_modes
 
-        # --- 3. ประมวลผลแต่ละไฟล์ ---
         results: List[Dict[str, Any]] = []
         processed_count = 0
         email = api_key_data.get("email")
@@ -1284,7 +1320,7 @@ async def analyze_image(
         async with analysis_concurrency_limiter:
             for record in files_payload:
                 file_path = record["file_path"]
-                original_name = record["original_filename"]
+                original_name = record["original_filename"]  # ใช้ชื่อเดิมจากผู้ใช้
 
                 if not is_image(file_path):
                     remove_stored_file(record)
@@ -1309,7 +1345,6 @@ async def analyze_image(
                     for d in detections:
                         model_summary[d.get("model_type", "unknown")] += 1
 
-                    # บันทึกผลลัพธ์ (bbox)
                     processed_filename = blurred_filename = None
                     processed_url = blurred_url = None
 
@@ -1343,7 +1378,6 @@ async def analyze_image(
                             request.url_for("uploaded_file", filename=blurred_filename)
                         )
 
-                    # ตัดสินผล
                     status_result = "passed"
                     for d in detections:
                         th = float(resolved_thresholds.get(d.get("model_type"), 0.5))
@@ -1362,7 +1396,6 @@ async def analyze_image(
                     results.append(result_entry)
                     processed_count += 1
 
-                    # บันทึกประวัติ
                     log_api_key_usage_event(
                         api_key=api_key,
                         email=email,
@@ -1398,7 +1431,6 @@ async def analyze_image(
                 finally:
                     Path(file_path).unlink(missing_ok=True)
 
-        # --- 4. สรุปผลตอบกลับ ---
         valid_results = [r for r in results if r["status"] in ("passed", "failed")]
         overall_status = (
             "failed"
@@ -1423,7 +1455,6 @@ async def analyze_image(
             "output_modes": resolved_output_modes,
         }
 
-        # ถ้าส่งมา 1 ไฟล์ → ยุบ results ลงมา top-level (backward compatible)
         if len(valid_results) == 1:
             single = valid_results[0]
             response_payload.update(
@@ -1453,149 +1484,133 @@ async def analyze_image(
 @app.post("/analyze-video")
 async def analyze_video(
     request: Request,
-    video: UploadFile = File(...),
-    analysis_types_form: Optional[str] = Form(None, alias="analysis_types"),
-    thresholds_form: Optional[str] = Form(None, alias="thresholds"),
     api_key_data: Dict[str, Any] = Depends(require_api_key),
+    video: UploadFile = File(..., description="ไฟล์วิดีโอ (อัปโหลดได้เพียง 1 ไฟล์)"),
+    analysis_types: Optional[str] = Form(
+        None, description="เช่น `['porn','weapon']` หรือ `porn,weapon`"
+    ),
+    thresholds: Optional[str] = Form(
+        None, description='เช่น `{"porn":0.3,"weapon":0.5}`'
+    ),
+    output_modes: Optional[str] = Form(
+        None, description='เช่น `["bbox","blur"]` หรือ `bbox,blur`'
+    ),
 ):
-    original_name = sanitize_filename(video.filename)
-    if not allowed_video(original_name):
-        await video.close()
+    form = await request.form()
+    video_files = form.getlist("video")  # ได้ list ของ UploadFile
+    if len(video_files) != 1:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported video format"
+            status_code=400,
+            detail=f"Exactly 1 video file is required, got {len(video_files)}."
         )
+    
+    video: UploadFile = video_files[0]
+    # อ่านเนื้อหา
+    video_content = await video.read()
+    await video.close()
 
-    saved_record = await save_upload_file(video, original_name=original_name)
-    temp_path = Path(saved_record["file_path"])
-
-    # prefer form-specified analysis_types when provided, otherwise use the api key's configured types
-    if analysis_types_form:
-        analysis_types = parse_analysis_types_value(analysis_types_form)
-    else:
-        analysis_types = parse_analysis_types_value(api_key_data.get("analysis_types"))
-
-    if not analysis_types:
-        remove_stored_file(saved_record)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="No analysis_types provided"
-        )
-
-    media_access_config = {
-        str(item).lower() for item in api_key_data.get("media_access", []) if item
-    }
-    if media_access_config and "video" not in media_access_config:
-        remove_stored_file(saved_record)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="API Key ไม่รองรับการวิเคราะห์วิดีโอ",
-        )
-
-    thresholds = parse_thresholds_value(api_key_data.get("thresholds"))
-    if not thresholds:
-        thresholds = parse_thresholds_value(thresholds_form)
-    for model_type in analysis_types:
-        thresholds.setdefault(model_type, 0.5)
-
-    output_modes_config = set(
-        parse_output_modes_value(api_key_data.get("output_modes"))
-    )
-    if not output_modes_config:
-        output_modes_config = {"bbox", "blur"}
-
-    include_bbox = not output_modes_config or "bbox" in output_modes_config
-    include_blur = not output_modes_config or "blur" in output_modes_config
+    # ✅ ใช้ชื่อสุ่ม
+    safe_filename = f"video_{uuid.uuid4()}{Path(video.filename).suffix}"
+    video_path = UPLOAD_FOLDER / safe_filename
 
     try:
-        async with analysis_concurrency_limiter:
-            processed_path, blurred_path, detections, aggregated = (
-                await run_in_threadpool(
-                    process_video_media,
-                    temp_path,
-                    analysis_types,
-                    thresholds,
-                    include_bbox,
-                    include_blur,
-                )
+        # บันทึกไฟล์ชั่วคราว
+        with open(video_path, "wb") as f:
+            f.write(video_content)
+
+        # ตรวจสอบระยะเวลา
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration = frame_count / fps if fps > 0 else 0
+        cap.release()
+
+        if duration > 60:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded video exceeds the 1-minute limit.",
             )
 
-        processed_filename = processed_path.name if processed_path else None
-        blurred_filename = blurred_path.name if blurred_path else None
-        processed_url = (
-            str(request.url_for("uploaded_file", filename=processed_filename))
-            if processed_filename
-            else None
-        )
-        blurred_url = (
-            str(request.url_for("uploaded_file", filename=blurred_filename))
-            if blurred_filename
-            else None
+        # วิเคราะห์ config
+        parsed_analysis_types = parse_analysis_types_value(
+            analysis_types
+        ) or parse_analysis_types_value(api_key_data.get("analysis_types"))
+        parsed_thresholds = parse_thresholds_value(
+            thresholds
+        ) or parse_thresholds_value(api_key_data.get("thresholds"))
+        parsed_output_modes = parse_output_modes_value(
+            output_modes
+        ) or parse_output_modes_value(api_key_data.get("output_modes"))
+
+        if not parsed_analysis_types:
+            raise HTTPException(400, "No analysis types provided")
+
+        # ประมวลผลวิดีโอ
+        processed_video_path, blurred_video_path, detections, model_summary = (
+            await run_in_threadpool(
+                process_video_media,
+                video_path,
+                parsed_analysis_types,
+                parsed_thresholds,
+                "bbox" in parsed_output_modes,
+                "blur" in parsed_output_modes,
+            )
         )
 
-        status_result = "passed"
-        for frame_info in detections:
-            for detection in frame_info["detections"]:
-                threshold = float(thresholds.get(detection.get("model_type"), 0.5))
-                if detection.get("confidence", 0) > threshold:
-                    status_result = "failed"
-                    break
-            if status_result == "failed":
-                break
+        # สร้าง URL
+        processed_video_url = blurred_video_url = None
+        if processed_video_path:
+            processed_video_url = str(
+                request.url_for("uploaded_file", filename=processed_video_path.name)
+            )
+        if blurred_video_path:
+            blurred_video_url = str(
+                request.url_for("uploaded_file", filename=blurred_video_path.name)
+            )
 
+        # บันทึกการใช้งาน
         api_key = api_key_data.get("api_key")
         email = api_key_data.get("email")
-        summary_dict = dict(aggregated)
         log_api_key_usage_event(
             api_key=api_key,
             email=email,
-            analysis_types=analysis_types,
-            thresholds=thresholds,
+            analysis_types=parsed_analysis_types,
+            thresholds=parsed_thresholds,
             result={
-                "original_filename": original_name,
-                "stored_filename": saved_record.get("stored_filename"),
-                "status": status_result,
-                "detections": summary_dict,
-                "processed_filename": processed_filename,
-                "blurred_filename": blurred_filename,
+                "original_filename": video.filename,
+                "status": "success",
+                "detections": model_summary,
                 "media_type": "video",
-                "output_modes": (
-                    list(output_modes_config)
-                    if output_modes_config
-                    else ["bbox", "blur"]
-                ),
-                "media_access": (
-                    list(media_access_config)
-                    if media_access_config
-                    else ["image", "video"]
-                ),
+                "output_modes": parsed_output_modes,
             },
         )
 
+        # อัปเดตการใช้งาน
         api_keys_collection.update_one(
             {"api_key": api_key},
             {"$set": {"last_used_at": datetime.utcnow()}, "$inc": {"usage_count": 1}},
         )
 
-        Path(saved_record["file_path"]).unlink(missing_ok=True)
-        uploaded_files_collection.delete_one(
-            {"filename": saved_record["stored_filename"]}
+        return JSONResponse(
+            {
+                "status": "success",
+                "detections": detections,
+                "model_summary": model_summary,
+                "processed_video_url": processed_video_url,
+                "blurred_video_url": blurred_video_url,
+            }
         )
 
-        return {
-            "status": status_result,
-            "original_filename": original_name,
-            "processed_video_url": processed_url,
-            "processed_blurred_video_url": blurred_url,
-            "detections": detections,
-            "summary": summary_dict,
-            "summary_labels": list(summary_dict.keys()),
-            "output_modes": (
-                list(output_modes_config) if output_modes_config else ["bbox", "blur"]
-            ),
-        }
-    except Exception as exc:
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-        ) from exc
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing video: {str(e)}",
+        )
+    finally:
+        if video_path.exists():
+            video_path.unlink()
 
 
 @app.post("/request-api-key")
@@ -2129,12 +2144,18 @@ async def upload_receipt(
 
         if date_text:
             try:
-                # สมมุติว่า date_text เป็นรูปแบบ DD/MM/YYYY (ค.ศ.)
+                # แปลงปี พ.ศ. เป็น ค.ศ. ก่อนเปรียบเทียบ
                 parts = date_text.split("/")
-                if len(parts) != 3:
-                    raise HTTPException(...)
-                day, month, year_str = parts
-                date_from_ocr = datetime(int(year_str), int(month), int(day)).date()
+                day, month, year_str = parts[0], parts[1], parts[2]
+                year_int = int(year_str)
+                if year_int < 100:  # เช่น 68
+                    year_ad = year_int + 1957  # 68 + 1957 = 2025
+                elif year_int >= 2500:  # เช่น 2568
+                    year_ad = year_int - 543  # 2568 - 543 = 2025
+                else:  # ถ้าเป็นปี ค.ศ. อยู่แล้ว เช่น 2025
+                    year_ad = year_int
+
+                date_from_ocr = datetime(int(year_ad), int(month), int(day)).date()
 
                 if date_from_ocr != created_datetime.date():
                     raise HTTPException(
@@ -2261,6 +2282,7 @@ async def upload_receipt(
                 save_path.unlink()
             except Exception:
                 pass
+
 
 @app.get("/auth/google")
 async def auth_google() -> RedirectResponse:

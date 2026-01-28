@@ -147,7 +147,43 @@ async function processSingleImage(file) {
   await processMultipleImages([file]);
 }
 
+function validateImageUploadCount(files) {
+  if (files.length > 100) {
+    alert('คุณสามารถอัปโหลดรูปภาพได้สูงสุด 100 รูปเท่านั้น');
+    return false;
+  }
+  return true;
+}
+
+// Add validation for video duration
+async function validateVideoDuration(file) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+
+    video.onloadedmetadata = () => {
+      window.URL.revokeObjectURL(video.src);
+      const duration = video.duration;
+      if (duration > 60) {
+        alert('วิดีโอที่อัปโหลดต้องมีความยาวไม่เกิน 1 นาที');
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    };
+
+    video.onerror = () => {
+      alert('ไม่สามารถตรวจสอบความยาวของวิดีโอได้');
+      resolve(false);
+    };
+
+    video.src = URL.createObjectURL(file);
+  });
+}
+
 async function processMultipleImages(files) {
+  if (!validateImageUploadCount(files)) return;
+
   const selection = collectModelSelections();
   if (!selection) return;
 
@@ -291,14 +327,18 @@ async function processMultipleImages(files) {
   }
 }
 
+// Update uploadVideo to validate video duration
 async function uploadVideo() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'video/*';
 
   input.onchange = async () => {
-    const file = input.files?.[0];
+    const file = input.files?. [0];
     if (!file) return;
+
+    const isValid = await validateVideoDuration(file);
+    if (!isValid) return;
 
     const selection = collectModelSelections();
     if (!selection) {
